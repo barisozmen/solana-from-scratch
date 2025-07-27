@@ -1,0 +1,35 @@
+# Solana-like Blockchain Implementation Requirements
+# Educational Python implementation of Solana's blockchain architecture
+
+# Cryptography and digital signatures
+ecdsa>=0.18.0          # Ed25519 signatures for transactions and accounts
+cryptography>=3.4.8    # Additional cryptographic primitives
+
+# Networking and async I/O
+asyncio-mqtt>=0.11.1   # MQTT for networking (alternative to raw sockets)
+aiohttp>=3.8.0         # HTTP client/server for RPC endpoints
+websockets>=10.0       # WebSocket support for real-time communication
+
+# Data handling and serialization
+dataclasses-json>=0.5.7  # JSON serialization for data classes
+msgpack>=1.0.0         # Efficient binary serialization (alternative to bincode)
+pydantic>=1.10.0       # Data validation and settings management
+
+# Performance and monitoring
+psutil>=5.9.0          # System and process monitoring
+numpy>=1.21.0          # Numerical operations for performance analysis
+
+# Development and testing
+pytest>=7.0.0          # Testing framework
+pytest-asyncio>=0.19.0 # Async testing support
+black>=22.0.0          # Code formatting
+mypy>=0.991            # Type checking
+
+# Optional: Enhanced features (commented out by default)
+# uvloop>=0.16.0       # High-performance event loop (Unix only)
+# orjson>=3.8.0        # Fast JSON library
+# cython>=0.29.0       # Compile Python to C for speed
+
+# Documentation (for developers)
+# sphinx>=4.5.0        # Documentation generation
+# sphinx-rtd-theme>=1.0.0  # ReadTheDocs theme 
