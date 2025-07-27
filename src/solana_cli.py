@@ -21,6 +21,8 @@ import asyncio
 import json
 import sys
 import time
+import os
+import signal
 from typing import Dict, Any, Optional
 from pathlib import Path
 
@@ -28,6 +30,84 @@ from pathlib import Path
 from core.blockchain import SolanaBlockchain
 from core.transactions import generate_keypair, create_transfer_instruction, TransactionBuilder, sign_transaction
 from core.poh import benchmark_poh
+
+
+class ValidatorStateManager:
+    """Manages validator state across different processes/terminals."""
+    
+    def __init__(self, state_dir: Path = None):
+        self.state_dir = state_dir or Path.home() / ".solana-validator"
+        self.state_dir.mkdir(exist_ok=True)
+        self.state_file = self.state_dir / "validator.json"
+        self.pid_file = self.state_dir / "validator.pid"
+    
+    def write_state(self, node_id: str, pid: int, port: int = 8899):
+        """Write validator state to file."""
+        try:
+            state = {
+                'node_id': node_id,
+                'pid': pid,
+                'port': port,
+                'start_time': time.time(),
+                'status': 'running'
+            }
+            
+            print(f"📁 Writing validator state to {self.state_file}")
+            with open(self.state_file, 'w') as f:
+                json.dump(state, f, indent=2)
+            
+            with open(self.pid_file, 'w') as f:
+                f.write(str(pid))
+                
+            print(f"✅ Validator state written successfully (PID: {pid})")
+        except Exception as e:
+            print(f"❌ Failed to write validator state: {e}")
+            
+    def read_state(self) -> Optional[Dict[str, Any]]:
+        """Read validator state from file."""
+        if not self.state_file.exists():
+            return None
+            
+        try:
+            with open(self.state_file, 'r') as f:
+                return json.load(f)
+        except (json.JSONDecodeError, IOError):
+            return None
+    
+    def is_validator_running(self) -> bool:
+        """Check if validator is currently running."""
+        state = self.read_state()
+        if not state:
+            print(f"🔍 No validator state found at {self.state_file}")
+            return False
+            
+        pid = state.get('pid')
+        if not pid:
+            print("⚠️ No PID found in validator state")
+            return False
+            
+        # Check if process is still running
+        try:
+            os.kill(pid, 0)  # Signal 0 just checks if process exists
+            print(f"✅ Found running validator (PID: {pid})")
+            return True
+        except (OSError, ProcessLookupError):
+            # Process doesn't exist, clean up stale files
+            print(f"🧹 Process {pid} not running, cleaning up stale files")
+            self.cleanup_state()
+            return False
+    
+    def cleanup_state(self):
+        """Clean up state files."""
+        for file_path in [self.state_file, self.pid_file]:
+            if file_path.exists():
+                file_path.unlink()
+    
+    def get_validator_info(self) -> Optional[Dict[str, Any]]:
+        """Get running validator information."""
+        if self.is_validator_running():
+            return self.read_state()
+        return None
 
 
 class SolanaNode:
@@ -47,18 +127,38 @@ class SolanaNode:
         self.blockchain = SolanaBlockchain()
         self.is_running = False
         self.keypairs = {}  # Store generated keypairs
+        self.state_manager = ValidatorStateManager()
         
         # Node configuration
         self.block_production_interval = 0.4  # 400ms slots
         self.auto_produce_blocks = True
         
+        # Set up signal handlers for graceful shutdown
+        signal.signal(signal.SIGINT, self._signal_handler)
+        signal.signal(signal.SIGTERM, self._signal_handler)
+        
         print(f"Node {node_id} initialized successfully")
         print(f"Genesis leader: {self.blockchain.genesis_leader[:16]}...")
+        
+    def _signal_handler(self, signum, frame):
+        """Handle shutdown signals."""
+        print(f"\n🛑 Received signal {signum}, shutting down gracefully...")
+        self.stop()
+        sys.exit(0)
+        
+    def stop(self):
+        """Stop the validator and clean up."""
+        self.is_running = False
+        self.state_manager.cleanup_state()
+        print("✅ Validator stopped")
     
     async def start(self):
         """Start the validator node."""
         print(f"Starting validator node {self.node_id}...")
         self.is_running = True
+        
+        # Write state file so other terminals can detect this validator
+        self.state_manager.write_state(self.node_id, os.getpid())
         
         # Start background tasks
         tasks = [
@@ -70,13 +170,8 @@ class SolanaNode:
         try:
             await asyncio.gather(*tasks)
         except KeyboardInterrupt:
-            print(f"\nShutting down node {self.node_id}...")
-            await self.stop()
-    
-    async def stop(self):
-        """Stop the validator node."""
-        self.is_running = False
-        print(f"Node {self.node_id} stopped")
+            print(f"\n🛑 Shutting down node {self.node_id}...")
+            self.stop()
     
     async def block_production_loop(self):
         """Main block production loop."""
@@ -152,6 +247,7 @@ class SolanaCLI:
         self.node: Optional[SolanaNode] = None
         self.wallet_path = Path.home() / ".solana-wallet.json"
         self.keypairs = self.load_wallet()
+        self.state_manager = ValidatorStateManager()
     
     def load_wallet(self) -> Dict[str, Any]:
         """Load stored keypairs from wallet file."""
@@ -190,8 +286,35 @@ class SolanaCLI:
             print(f"Created new keypair for {name}: {public_key[:16]}...")
             return private_key, public_key
     
+    def get_running_validator(self) -> Optional[SolanaNode]:
+        """Check if there's a running validator and connect to it."""
+        if self.node and self.node.is_running:
+            return self.node
+        
+        # Check if there's a validator running in another process
+        if self.state_manager.is_validator_running():
+            validator_info = self.state_manager.get_validator_info()
+            if validator_info:
+                print(f"📡 Detected running validator: {validator_info['node_id']} (PID: {validator_info['pid']})")
+                print("💡 Note: In this demo, CLI operations create a separate blockchain instance.")
+                print("    In a production implementation, this would connect via RPC to the running validator.")
+                
+                # For this educational demo, create a fresh blockchain instance
+                # This allows CLI operations to work, though it's not the same state as the running validator
+                self.node = SolanaNode(validator_info['node_id'])
+                return self.node
+        
+        return None
+
     async def start_validator(self, node_id: str = "validator-1"):
         """Start a validator node."""
+        # Check if a validator is already running
+        if self.state_manager.is_validator_running():
+            validator_info = self.state_manager.get_validator_info()
+            print(f"❌ Validator '{validator_info['node_id']}' is already running (PID: {validator_info['pid']})")
+            print("   Stop the existing validator first or use a different node ID.")
+            return
+        
         print("🚀 Starting Solana Validator Node")
         print("=" * 50)
         
@@ -221,7 +344,8 @@ class SolanaCLI:
     
     def transfer(self, from_name: str, to_name: str, amount: float):
         """Transfer SOL between accounts."""
-        if not self.node:
+        validator = self.get_running_validator()
+        if not validator:
             print("❌ No running node. Start a validator first.")
             return
         
@@ -235,18 +359,18 @@ class SolanaCLI:
         lamports = int(amount * 1_000_000_000)
         
         # Create and submit transaction
-        transaction = self.node.blockchain.create_transfer_transaction(
+        transaction = validator.blockchain.create_transfer_transaction(
             from_keypair, to_keypair[1], lamports
         )
         
         if transaction:
-            success = self.node.blockchain.add_transaction(transaction)
+            success = validator.blockchain.add_transaction(transaction)
             if success:
                 print(f"✅ Transaction submitted: {transaction.hash()[:16]}...")
                 print(f"⏳ Waiting for confirmation...")
                 
                 # Wait for confirmation
-                self.wait_for_confirmation(transaction.hash())
+                self.wait_for_confirmation(transaction.hash(), validator)
             else:
                 print(f"❌ Transaction rejected")
         else:
@@ -254,14 +378,15 @@ class SolanaCLI:
     
     def balance(self, account_name: str):
         """Check account balance."""
-        if not self.node:
+        validator = self.get_running_validator()
+        if not validator:
             print("❌ No running node. Start a validator first.")
             return
         
         keypair = self.get_or_create_keypair(account_name)
         pubkey = keypair[1]
         
-        balance_lamports = self.node.blockchain.get_balance(pubkey)
+        balance_lamports = validator.blockchain.get_balance(pubkey)
         balance_sol = balance_lamports / 1_000_000_000
         
         print(f"💰 Balance for {account_name}:")
@@ -270,18 +395,19 @@ class SolanaCLI:
     
     def status(self):
         """Show blockchain status."""
-        if not self.node:
+        validator = self.get_running_validator()
+        if not validator:
             print("❌ No running node. Start a validator first.")
             return
         
-        self.node.blockchain.display_status()
+        validator.blockchain.display_status()
     
-    def wait_for_confirmation(self, tx_hash: str, timeout: int = 30):
+    def wait_for_confirmation(self, tx_hash: str, validator: SolanaNode, timeout: int = 30):
         """Wait for transaction confirmation."""
         start_time = time.time()
         
         while time.time() - start_time < timeout:
-            status = self.node.blockchain.get_transaction_status(tx_hash)
+            status = validator.blockchain.get_transaction_status(tx_hash)
             
             if status['status'] == 'confirmed':
                 print(f"✅ Transaction confirmed in slot {status['slot']}")
@@ -297,7 +423,8 @@ class SolanaCLI:
     
     def demo(self):
         """Run an interactive demo."""
-        if not self.node:
+        validator = self.get_running_validator()
+        if not validator:
             print("❌ No running node. Start a validator first with:")
             print("   python solana_cli.py start-validator")
             return
@@ -306,8 +433,8 @@ class SolanaCLI:
         print("=" * 40)
         
         while True:
-            print(f"\nCurrent slot: {self.node.blockchain.current_slot()}")
-            print(f"Pending transactions: {self.node.blockchain.mempool.get_pending_count()}")
+            print(f"\nCurrent slot: {validator.blockchain.current_slot()}")
+            print(f"Pending transactions: {validator.blockchain.mempool.get_pending_count()}")
             
             print("\nChoose an action:")
             print("1. Send transaction")
@@ -333,7 +460,7 @@ class SolanaCLI:
             
             elif choice == '4':
                 count = int(input("Number of transactions to generate: ").strip() or "5")
-                self.generate_test_transactions(count)
+                self.generate_test_transactions(count, validator)
             
             elif choice == '5':
                 print("👋 Goodbye!")
@@ -342,7 +469,7 @@ class SolanaCLI:
             else:
                 print("Invalid choice. Please try again.")
     
-    def generate_test_transactions(self, count: int):
+    def generate_test_transactions(self, count: int, validator: SolanaNode):
         """Generate test transactions for demonstration."""
         print(f"🔄 Generating {count} test transactions...")
         
@@ -353,8 +480,8 @@ class SolanaCLI:
             for name in accounts:
                 keypair = self.get_or_create_keypair(name)
                 pubkey = keypair[1]
-                if not self.node.blockchain.accounts.account_exists(pubkey):
-                    self.node.blockchain.create_account(pubkey, lamports=1_000_000_000)  # 1 SOL
+                if not validator.blockchain.accounts.account_exists(pubkey):
+                    validator.blockchain.create_account(pubkey, lamports=1_000_000_000)  # 1 SOL
             
             # Create random transfer
             import random
@@ -367,12 +494,12 @@ class SolanaCLI:
             from_keypair = self.get_or_create_keypair(from_name)
             to_keypair = self.get_or_create_keypair(to_name)
             
-            transaction = self.node.blockchain.create_transfer_transaction(
+            transaction = validator.blockchain.create_transfer_transaction(
                 from_keypair, to_keypair[1], int(amount * 1_000_000_000)
             )
             
             if transaction:
-                self.node.blockchain.add_transaction(transaction)
+                validator.blockchain.add_transaction(transaction)
             
             time.sleep(0.1)  # Small delay between transactions
         
@@ -389,16 +516,17 @@ class SolanaCLI:
         print(f"   Entries per second: {poh_results['entries_per_second']:.2f}")
         print(f"   Hash rate: {poh_results['iterations_per_second']:.0f} hashes/sec")
         
-        if self.node:
+        validator = self.get_running_validator()
+        if validator:
             # Transaction throughput test
             print(f"\n🚀 Transaction Throughput Test:")
             start_time = time.time()
-            self.generate_test_transactions(100)
+            self.generate_test_transactions(100, validator)
             
             # Wait for processing
             time.sleep(5.0)
             
-            stats = self.node.blockchain.get_blockchain_stats()
+            stats = validator.blockchain.get_blockchain_stats()
             elapsed = time.time() - start_time
             
             print(f"   Processed: {stats.total_transactions} transactions")
