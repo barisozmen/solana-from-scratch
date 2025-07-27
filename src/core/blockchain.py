@@ -65,14 +65,15 @@ class SolanaBlockchain:
         self.mempool = SolanaMempool(account_registry=self.accounts)
         self.mempool_monitor = MempoolMonitor(self.mempool)
         
+        # Configuration
+        self.max_transactions_per_block = 64
+        self.target_slot_time = 0.4  # 400ms slots like Solana
+        self.recent_blockhash_limit = 150  # Keep last 150 block hashes
+        
         # Blockchain state
         self.blocks: List[Block] = []
         self.block_hash_to_block: Dict[str, Block] = {}
         self.recent_blockhashes: List[str] = []
-        
-        # Genesis setup
-        self.genesis_leader = genesis_leader or self._generate_genesis_leader()
-        self._create_genesis_block()
         
         # Statistics and metrics
         self._stats = {
@@ -80,14 +81,13 @@ class SolanaBlockchain:
             'successful_transactions': 0,
             'total_fees_collected': 0,
             'total_compute_units_used': 0,
-            'blocks_produced': 1,  # Genesis block
+            'blocks_produced': 0,  # Will be 1 after genesis block
             'start_time': time.time(),
         }
         
-        # Configuration
-        self.max_transactions_per_block = 64
-        self.target_slot_time = 0.4  # 400ms slots like Solana
-        self.recent_blockhash_limit = 150  # Keep last 150 block hashes
+        # Genesis setup (must be after configuration)
+        self.genesis_leader = genesis_leader or self._generate_genesis_leader()
+        self._create_genesis_block()
         
     def add_transaction(self, transaction: SolanaTransaction) -> bool:
         """

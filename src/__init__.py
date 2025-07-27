@@ -36,10 +36,12 @@ __all__ = [
     'AccountRegistry',
     'PoH',
     'PoHEntry',
+    'PoHClock',
     'SolanaTransaction',
     'TransactionBuilder', 
     'Block',
     'SolanaMempool',
+    'MempoolMonitor',
     
     # Main application classes
     'SolanaNode',

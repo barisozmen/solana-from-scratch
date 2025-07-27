@@ -7,9 +7,9 @@ in Python, emphasizing clarity and educational value.
 Author: Peter Norvig style implementation
 """
 
-from .accounts import SolanaAccount, AccountInfo, AccountMeta
+from .accounts import SolanaAccount, AccountInfo, AccountMeta, AccountRegistry
 from .blocks import Block, BlockHeader  
-from .poh import PoH, PoHEntry
+from .poh import PoH, PoHEntry, PoHClock
 from .transactions import (
     SolanaTransaction, 
     TransactionMessage, 
@@ -18,15 +18,15 @@ from .transactions import (
     Instruction,
     TransactionBuilder
 )
-from .mempool import SolanaMempool
+from .mempool import SolanaMempool, MempoolMonitor
 from .blockchain import SolanaBlockchain
 
 __all__ = [
-    'SolanaAccount', 'AccountInfo', 'AccountMeta',
+    'SolanaAccount', 'AccountInfo', 'AccountMeta', 'AccountRegistry',
     'Block', 'BlockHeader',
-    'PoH', 'PoHEntry', 
+    'PoH', 'PoHEntry', 'PoHClock',
     'SolanaTransaction', 'TransactionMessage', 'MessageHeader',
     'CompiledInstruction', 'Instruction', 'TransactionBuilder',
-    'SolanaMempool',
+    'SolanaMempool', 'MempoolMonitor',
     'SolanaBlockchain'
 ] 
